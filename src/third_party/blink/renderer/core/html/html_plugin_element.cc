@@ -387,8 +387,12 @@ v8::Local<v8::Object> HTMLPlugInElement::PluginWrapper() {
     else
       plugin = PluginEmbeddedContentView();
 
-    if (plugin)
-      plugin_wrapper_.Reset(isolate, plugin->ScriptableObject(isolate));
+    if (plugin) {
+      plugin_wrapper_.Reset(
+          isolate,
+          plugin->ScriptableObject(isolate)
+          );
+    }
   }
   return plugin_wrapper_.Get(isolate);
 }

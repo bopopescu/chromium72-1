@@ -86,6 +86,7 @@ class TransformStream::Algorithm : public ScriptFunction {
 
 class TransformStream::FlushAlgorithm : public TransformStream::Algorithm {
  protected:
+  friend class blink::TransformStream::Algorithm;
   using Algorithm::Algorithm;
 
  private:
@@ -104,6 +105,7 @@ class TransformStream::FlushAlgorithm : public TransformStream::Algorithm {
 
 class TransformStream::TransformAlgorithm : public TransformStream::Algorithm {
  protected:
+  friend class blink::TransformStream::Algorithm;
   using Algorithm::Algorithm;
 
  private:

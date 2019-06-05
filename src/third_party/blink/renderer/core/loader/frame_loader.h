@@ -253,6 +253,10 @@ class CORE_EXPORT FrameLoader final {
   void ClientDroppedNavigation();
   void MarkAsLoading();
 
+#if defined(USE_NEVA_APPRUNTIME)
+  void DidNonFirstMeaningPaintAfterLoad();
+#endif
+
  private:
   bool PrepareRequestForThisFrame(FrameLoadRequest&);
   WebFrameLoadType DetermineFrameLoadType(

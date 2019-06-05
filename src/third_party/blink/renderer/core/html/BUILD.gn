@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//build/split_static_library.gni")
+import("//neva/neva.gni")
 import("//third_party/blink/renderer/core/core.gni")
 
 blink_core_sources("html") {
@@ -573,6 +574,16 @@ blink_core_sources("html") {
     "window_name_collection.cc",
     "window_name_collection.h",
   ]
+
+  if (use_neva_media) {
+    sources += [
+      "media/neva/html_media_element.h",
+    ]
+  } else {
+    sources += [
+      "media/neva/html_media_element_stub.h",
+    ]
+  }
 
   jumbo_excluded_sources = [ "canvas/canvas_rendering_context.cc" ]  # https://crbug.com/716395
 

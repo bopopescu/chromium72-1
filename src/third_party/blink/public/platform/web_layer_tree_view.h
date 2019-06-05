@@ -92,6 +92,10 @@ class WebLayerTreeView {
   // Sets the background color for the viewport.
   virtual void SetBackgroundColor(SkColor) {}
 
+#if defined(USE_NEVA_APPRUNTIME)
+  virtual void SetVisible(bool) {}
+#endif
+
   // Sets the current page scale factor and minimum / maximum limits. Both
   // limits are initially 1 (no page scale allowed).
   virtual void SetPageScaleFactorAndLimits(float page_scale_factor,

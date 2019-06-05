@@ -39,6 +39,11 @@ String PageVisibilityStateString(mojom::PageVisibilityState state) {
       return "visible";
     case mojom::PageVisibilityState::kHidden:
       return "hidden";
+    ///@name: USE_NEVA_APPRUNTIME
+    ///@{
+    case mojom::PageVisibilityState::kLaunching:
+      return "launching";
+    ///@}
     case mojom::PageVisibilityState::kPrerender:
       return "prerender";
   }

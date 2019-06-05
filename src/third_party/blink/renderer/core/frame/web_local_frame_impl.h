@@ -263,6 +263,15 @@ class CORE_EXPORT WebLocalFrameImpl final
   WebLocalFrameImpl* LocalRoot() override;
   WebFrame* FindFrameByName(const WebString& name) override;
   void SendPings(const WebURL& destination_url) override;
+
+#if defined(USE_NEVA_APPRUNTIME)
+  void ReplaceBaseURL(const WebString& url) const override;
+  void ResetStateToMarkNextPaintForContainer() override;
+#endif
+#if defined(USE_NEVA_MEDIA)
+  void SetSuppressMediaPlay(bool suppress) override;
+  bool IsSuppressedMediaPlay() const override;
+#endif
   void ReportContentSecurityPolicyViolation(
       const blink::WebContentSecurityPolicyViolation&) override;
   bool IsLoading() const override;
@@ -517,6 +526,11 @@ class CORE_EXPORT WebLocalFrameImpl final
   WebTextCheckClient* text_check_client_;
 
   WebSpellCheckPanelHostClient* spell_check_panel_host_client_;
+
+#if defined(USE_NEVA_MEDIA)
+  // suppress media player under this frame.
+  bool suppress_media_play_;
+#endif
 
   // Oilpan: WebLocalFrameImpl must remain alive until close() is called.
   // Accomplish that by keeping a self-referential Persistent<>. It is

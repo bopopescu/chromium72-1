@@ -320,5 +320,13 @@
     "writeend",
     "writestart",
     "zoom",
+
+///@name USE_NEVA_MEDIA
+///@{
+    "umsmediainfo",
+    "webosmediafocuschange",
+    "updatecamerastate",
+    "pipelinestarted",
+///@}
   ],
 }

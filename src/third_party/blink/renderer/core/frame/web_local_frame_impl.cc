@@ -186,6 +186,7 @@
 #include "third_party/blink/renderer/core/frame/picture_in_picture_controller.h"
 #include "third_party/blink/renderer/core/frame/remote_frame.h"
 #include "third_party/blink/renderer/core/frame/remote_frame_owner.h"
+#include "third_party/blink/renderer/core/frame/root_frame_viewport.h"
 #include "third_party/blink/renderer/core/frame/screen_orientation_controller.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/smart_clip.h"
@@ -254,6 +255,10 @@
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/time.h"
+
+#if defined(USE_NEVA_APPRUNTIME)
+#include "third_party/blink/renderer/core/paint/first_meaningful_paint_detector.h"
+#endif
 
 namespace blink {
 
@@ -1754,6 +1759,9 @@ WebLocalFrameImpl::WebLocalFrameImpl(
       interface_registry_(interface_registry),
       input_method_controller_(*this),
       spell_check_panel_host_client_(nullptr),
+#if defined(USE_NEVA_MEDIA)
+      suppress_media_play_(false),
+#endif
       self_keep_alive_(this) {
   DCHECK(client_);
   g_frame_count++;
@@ -1875,6 +1883,7 @@ void WebLocalFrameImpl::CreateFrameView() {
     return;
 
   bool is_main_frame = !Parent();
+
   // TODO(dcheng): Can this be better abstracted away? It's pretty ugly that
   // only local roots are special-cased here.
   IntSize initial_size = (is_main_frame || !frame_widget_)
@@ -2015,6 +2024,35 @@ void WebLocalFrameImpl::SendPings(const WebURL& destination_url) {
       html_anchor->SendPings(destination_url);
   }
 }
+
+#if defined(USE_NEVA_APPRUNTIME)
+void WebLocalFrameImpl::ReplaceBaseURL(const WebString& url) const {
+  if (!GetFrame())
+    return;
+
+  GetFrame()->Loader().UpdateForSameDocumentNavigation(
+      KURL(KURL(), url), kSameDocumentNavigationHistoryApi, nullptr,
+      kScrollRestorationAuto, WebFrameLoadType::kReplaceCurrentItem,
+      GetFrame()->GetDocument());
+}
+
+void WebLocalFrameImpl::ResetStateToMarkNextPaintForContainer() {
+  if (!GetFrame())
+    return;
+
+  FirstMeaningfulPaintDetector::From(*(GetFrame()->GetDocument())).
+      ResetStateToMarkNextPaintForContainer();
+}
+#endif
+
+#if defined(USE_NEVA_MEDIA)
+void WebLocalFrameImpl::SetSuppressMediaPlay(bool suppress) {
+  suppress_media_play_ = suppress;
+}
+bool WebLocalFrameImpl::IsSuppressedMediaPlay() const {
+  return suppress_media_play_;
+}
+#endif
 
 bool WebLocalFrameImpl::DispatchBeforeUnloadEvent(bool is_reload) {
   if (!GetFrame())

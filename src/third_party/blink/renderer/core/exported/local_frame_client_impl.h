@@ -147,6 +147,11 @@ class LocalFrameClientImpl final : public LocalFrameClient {
   void ReportLegacySymantecCert(const KURL&, bool) override;
   void ReportLegacyTLSVersion(const KURL&) override;
   void DidChangePerformanceTiming() override;
+#if defined(USE_NEVA_APPRUNTIME)
+  // Will be called when first-Meaningful-paint is not detected until resource loaded.
+  void DidNonFirstMeaningPaintAfterLoad() override;
+  bool DecidePolicyForResponse(const ResourceResponse&) override;
+#endif
   void DidObserveLoadingBehavior(WebLoadingBehaviorFlag) override;
   void DidObserveNewFeatureUsage(mojom::WebFeature) override;
   void DidObserveNewCssPropertyUsage(int, bool) override;

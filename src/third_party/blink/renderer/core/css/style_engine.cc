@@ -70,6 +70,10 @@
 #include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #include "third_party/blink/renderer/platform/fonts/font_selector.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#if defined(USE_NEVA_APPRUNTIME)
+#include "third_party/blink/renderer/core/page/injected_style_sheets.h"
+#include "third_party/blink/renderer/platform/url_pattern_matcher.h"
+#endif
 
 namespace blink {
 
@@ -1669,6 +1673,58 @@ StyleRuleKeyframes* StyleEngine::KeyframeStylesForAnimation(
 
   return it->value.Get();
 }
+
+#if defined(USE_NEVA_APPRUNTIME)
+  const HeapVector<
+      std::pair<StyleSheetKey, TraceWrapperMember<CSSStyleSheet>>>&
+    StyleEngine::InjectedAuthorStyleSheets() {
+  UpdateInjectedStyleSheetCache();
+  return injected_author_style_sheets_;
+}
+
+void StyleEngine::UpdateInjectedStyleSheetCache() {
+  if (injected_style_sheet_cache_valid_)
+    return;
+  injected_style_sheet_cache_valid_ = true;
+  injected_author_style_sheets_.clear();
+
+  Page* owningPage = GetDocument().GetPage();
+  if (!owningPage)
+    return;
+
+  const InjectedStyleSheetEntryVector& entries =
+      InjectedStyleSheets::Instance().Entries();
+  for (unsigned i = 0; i < entries.size(); ++i) {
+    const InjectedStyleSheetEntry* entry = entries[i].get();
+    if (entry->InjectedFrames() == InjectStyleInTopFrameOnly &&
+        GetDocument().LocalOwner())
+      continue;
+    if (!URLPatternMatcher::matchesPatterns(GetDocument().Url(), entry->WhiteList()))
+      continue;
+
+    CSSStyleSheet* groupSheet = CSSStyleSheet::CreateInline(GetDocument(), KURL());
+    const WebStyleSheetKey& injection_key = WebDocument::GenerateNewStyleSheetKey();
+    injected_author_style_sheets_.push_back(std::make_pair(injection_key.Utf8().c_str(),
+                                             groupSheet));
+    groupSheet->Contents()->ParseString(entry->Source());
+  }
+}
+
+void StyleEngine::InvalidateInjectedStyleSheetCache() {
+  injected_style_sheet_cache_valid_ = false;
+  MarkDocumentDirty();
+  // FIXME: updateInjectedStyleSheetCache is called inside
+  // StyleSheetCollection::updateActiveStyle
+  // Sheets and batch updates lots of sheets so we can't
+  // call addedStyleSheet() or removedStyleSheet().
+  GetDocument().GetStyleEngine().UpdateActiveStyleSheets();
+}
+
+void StyleEngine::CompatibilityModeChanged() {
+  if (!injected_author_style_sheets_.IsEmpty())
+    InvalidateInjectedStyleSheetCache();
+}
+#endif
 
 DocumentStyleEnvironmentVariables& StyleEngine::EnsureEnvironmentVariables() {
   if (!environment_variables_) {

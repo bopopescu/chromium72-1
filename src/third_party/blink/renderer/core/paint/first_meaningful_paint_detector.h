@@ -41,6 +41,11 @@ class CORE_EXPORT FirstMeaningfulPaintDetector
                       WebLayerTreeView::SwapResult,
                       base::TimeTicks);
   void NotifyFirstContentfulPaint(TimeTicks swap_stamp);
+
+#if defined(USE_NEVA_APPRUNTIME)
+  void ResetStateToMarkNextPaintForContainer();
+#endif
+
   void OnNetwork0Quiet();
   void OnNetwork2Quiet();
 
@@ -62,6 +67,9 @@ class CORE_EXPORT FirstMeaningfulPaintDetector
   void ReportHistograms();
   void RegisterNotifySwapTime(PaintEvent);
   void SetFirstMeaningfulPaint(TimeTicks stamp, TimeTicks swap_stamp);
+#if defined(USE_NEVA_APPRUNTIME)
+  void NotifyNonFirstMeaningfulPaint();
+#endif
 
   bool next_paint_is_meaningful_ = false;
   HadUserInput had_user_input_ = kNoUserInput;

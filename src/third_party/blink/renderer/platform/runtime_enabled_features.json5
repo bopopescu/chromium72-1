@@ -1437,5 +1437,44 @@
       name: "XSLT",
       status: "stable",
     },
+///@name USE_NEVA_MEDIA
+///@{
+    {
+      name: "AudioFocusExtension",
+      status: "experimental",
+    },
+    {
+      name: "CustomEventExtension",
+      status: "experimental",
+    },
+    {
+      name: "MediaSourceIsSupportedExtension",
+      status: "experimental",
+    },
+    {
+      name: "MediaTimelineOffset",
+      status: "experimental",
+    },
+    {
+      name: "NegativePlaybackRate",
+      status: "experimental",
+    },
+    {
+      name: "NoAudioAttr",
+      status: "experimental",
+    },
+    {
+      name: "SupportPreloadNoneOnMSE",
+      status: "experimental",
+    },
+    {
+      name: "UMSExtension",
+      status: "experimental",
+    },
+    {
+      name: "VideoTexture",
+      status: "experimental",
+    },
+///@}
   ],
 }

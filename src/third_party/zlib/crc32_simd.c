@@ -161,6 +161,7 @@ uint32_t ZLIB_INTERNAL crc32_sse42_simd_(  /* SSE4.2+PCLMUL */
  * TODO: implement a version using the PMULL instruction.
  */
 
+#if !defined(OS_WEBOS)
 /* CRC32 intrinsics are #ifdef'ed out of arm_acle.h unless we build with an
  * armv8 target, which is incompatible with ThinLTO optimizations on Android.
  * (Namely, mixing and matching different module-level targets makes ThinLTO
@@ -188,6 +189,10 @@ uint32_t ZLIB_INTERNAL crc32_sse42_simd_(  /* SSE4.2+PCLMUL */
 #endif
 
 TARGET_ARMV8_WITH_CRC
+#else
+#include <arm_acle.h>
+#define TARGET_ARMV8_WITH_CRC
+#endif
 uint32_t ZLIB_INTERNAL armv8_crc32_little(unsigned long crc,
                                           const unsigned char *buf,
                                           z_size_t len)

@@ -352,6 +352,15 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void BeginNavigation(std::unique_ptr<blink::WebNavigationInfo> info) {
   }
 
+#if defined(USE_NEVA_APPRUNTIME)
+  // This occurred when first meaningful paint was not detected until resource
+  // loaded.
+  virtual void DidNonFirstMeaningPaintAfterLoad() {}
+  virtual bool DecidePolicyForResponse(const WebURLResponse& response) {
+    return false;
+  }
+#endif
+
   // Asks the embedder whether the frame is allowed to navigate the main frame
   // to a data URL.
   // TODO(crbug.com/713259): Move renderer side checks to

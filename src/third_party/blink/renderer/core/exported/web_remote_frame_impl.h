@@ -105,6 +105,10 @@ class CORE_EXPORT WebRemoteFrameImpl final
 
   static WebRemoteFrameImpl* FromFrame(RemoteFrame&);
 
+#if defined(USE_NEVA_APPRUNTIME)
+  void ReplaceBaseURL(const WebString& url) const override;
+#endif
+
   void Trace(blink::Visitor*);
 
  private:

@@ -145,7 +145,10 @@ bool HTMLVideoElement::LayoutObjectIsNeeded(const ComputedStyle& style) const {
   return HTMLElement::LayoutObjectIsNeeded(style);
 }
 
-LayoutObject* HTMLVideoElement::CreateLayoutObject(const ComputedStyle&) {
+LayoutObject* HTMLVideoElement::CreateLayoutObject(const ComputedStyle& style) {
+#if defined(USE_NEVA_MEDIA)
+  ApplyVisibility(style.Visibility() == EVisibility::kVisible);
+#endif
   return new LayoutVideo(this);
 }
 
@@ -189,7 +192,11 @@ void HTMLVideoElement::ParseAttribute(
   if (params.name == kPosterAttr) {
     // In case the poster attribute is set after playback, don't update the
     // display state, post playback the correct state will be picked up.
+#if defined(USE_NEVA_MEDIA)
+    if (!IsPlayed()) {
+#else
     if (GetDisplayMode() < kVideo || !HasAvailableVideoFrame()) {
+#endif
       // Force a poster recalc by setting display_mode_ to kUnknown directly
       // before calling UpdateDisplayState.
       HTMLMediaElement::SetDisplayMode(kUnknown);
@@ -216,6 +223,26 @@ void HTMLVideoElement::ParseAttribute(
       remoting_interstitial_->OnPosterImageChanged();
     if (picture_in_picture_interstitial_)
       picture_in_picture_interstitial_->OnPosterImageChanged();
+#if defined(USE_NEVA_MEDIA)
+  } else if (RuntimeEnabledFeatures::NoAudioAttrEnabled() &&
+             params.name == kNoaudioAttr) {
+    if (!params.new_value.IsNull())
+      has_noaudio_attr_ = true;
+    else
+      has_noaudio_attr_ = false;
+    if (GetWebMediaPlayer())
+      GetWebMediaPlayer()->SetDisableAudio(*has_noaudio_attr_);
+#if defined(USE_VIDEO_TEXTURE)
+  } else if (RuntimeEnabledFeatures::VideoTextureEnabled() &&
+             params.name == kTextureAttr) {
+    if (!params.new_value.IsNull())
+      m_renderMode = blink::WebMediaPlayer::RenderModeTexture;
+    else
+      m_renderMode = blink::WebMediaPlayer::RenderModeHole;
+    if (GetWebMediaPlayer())  // TODO(neva): Is it the right place to notify?
+      GetWebMediaPlayer()->SetRenderMode(m_renderMode);
+#endif
+#endif
   } else if (params.name == kIntrinsicsizeAttr &&
              RuntimeEnabledFeatures::
                  ExperimentalProductivityFeaturesEnabled()) {

@@ -240,6 +240,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   void SetPageFrozen(bool frozen) override;
   WebWidget* MainFrameWidget() override;
 
+#if defined(USE_NEVA_APPRUNTIME)
+  void ReplaceBaseURL(const WebURL& newUrl) override;
+#endif
+
   void DidUpdateFullscreenSize();
 
   float DefaultMinimumPageScaleFactor() const;

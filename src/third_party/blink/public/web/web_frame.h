@@ -204,6 +204,10 @@ class BLINK_EXPORT WebFrame {
   void DetachFromParent();
 #endif
 
+#if defined(USE_NEVA_APPRUNTIME)
+  virtual void ReplaceBaseURL(const WebString& url) const = 0;
+#endif
+
  protected:
   explicit WebFrame(WebTreeScopeType);
   virtual ~WebFrame();

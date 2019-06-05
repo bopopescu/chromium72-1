@@ -813,9 +813,17 @@ void Document::SetCompatibilityMode(CompatibilityMode mode) {
     UseCounter::Count(*this, WebFeature::kQuirksModeDocument);
   else if (compatibility_mode_ == kLimitedQuirksMode)
     UseCounter::Count(*this, WebFeature::kLimitedQuirksModeDocument);
-
+#if defined(USE_NEVA_APPRUNTIME)
+  bool was_in_quirks_mode = InQuirksMode();
+#endif
   compatibility_mode_ = mode;
   GetSelectorQueryCache().Invalidate();
+#if defined(USE_NEVA_APPRUNTIME)
+  if (InQuirksMode() != was_in_quirks_mode) {
+    // All injected stylesheets have to reparse using the different mode.
+    style_engine_->CompatibilityModeChanged();
+  }
+#endif
 }
 
 String Document::compatMode() const {
@@ -4787,6 +4795,17 @@ bool Document::SetFocusedElement(Element* new_focused_element,
       last_focus_type_ = params.type;
 
     focused_element_->SetFocused(true, params.type);
+
+#if defined(USE_NEVA_APPRUNTIME)
+    // Fix app_shell crash built by GCC 6.4.0
+    // focused_element_->SetFocused(true, params.type) can call
+    // SetFocusedElement and clear
+    // focused_element_.
+    if (focused_element_ != new_focused_element) {
+      focus_change_blocked = true;
+      goto SetFocusedElementDone;
+    }
+#endif
     focused_element_->SetHasFocusWithinUpToAncestor(true, ancestor);
 
     // Element::setFocused for frames can dispatch events.

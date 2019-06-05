@@ -205,6 +205,13 @@ WebRemoteFrameImpl* WebRemoteFrameImpl::FromFrame(RemoteFrame& frame) {
   return client->GetWebFrame();
 }
 
+#if defined(USE_NEVA_APPRUNTIME)
+void WebRemoteFrameImpl::ReplaceBaseURL(const WebString& url) const {
+  NOTREACHED();
+  // used in WebLocalFrameImpl for container application
+}
+#endif
+
 void WebRemoteFrameImpl::SetReplicatedOrigin(
     const WebSecurityOrigin& origin,
     bool is_potentially_trustworthy_opaque_origin) {

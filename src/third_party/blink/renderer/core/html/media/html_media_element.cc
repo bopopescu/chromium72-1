@@ -449,6 +449,9 @@ void HTMLMediaElement::OnMediaControlsEnabledChange(Document* document) {
 HTMLMediaElement::HTMLMediaElement(const QualifiedName& tag_name,
                                    Document& document)
     : HTMLElement(tag_name, document),
+#if defined(USE_NEVA_MEDIA)
+      neva::HTMLMediaElement<HTMLMediaElement>::HTMLMediaElement(),
+#endif
       PausableObject(&document),
       load_timer_(document.GetTaskRunner(TaskType::kInternalMedia),
                   this,
@@ -529,6 +532,9 @@ HTMLMediaElement::HTMLMediaElement(const QualifiedName& tag_name,
   AddElementToDocumentMap(this, &document);
 
   UseCounter::Count(document, WebFeature::kHTMLMediaElement);
+#if defined(USE_NEVA_MEDIA)
+  SetMaxTimeupdateEventFrequency();
+#endif
 }
 
 HTMLMediaElement::~HTMLMediaElement() {
@@ -737,6 +743,12 @@ void HTMLMediaElement::AttachLayoutTree(AttachContext& context) {
 void HTMLMediaElement::DidRecalcStyle(StyleRecalcChange) {
   if (GetLayoutObject())
     GetLayoutObject()->UpdateFromElement();
+
+#if defined(USE_NEVA_MEDIA)
+  if (GetLayoutObject() && IsHTMLVideoElement())
+    ApplyVisibility(GetLayoutObject()->Style()->Visibility() ==
+                    EVisibility::kVisible);
+#endif
 }
 
 void HTMLMediaElement::ScheduleTextTrackResourceLoad() {
@@ -946,6 +958,10 @@ void HTMLMediaElement::InvokeLoadAlgorithm() {
     ScheduleTimeupdateEvent(false);
 
     // 4.10 - Set the timeline offset to Not-a-Number (NaN).
+#if defined(USE_NEVA_MEDIA)
+    m_timelineOffset = std::numeric_limits<double>::quiet_NaN();
+#endif
+
     // 4.11 - Update the duration attribute to Not-a-Number (NaN).
 
     GetCueTimeline().UpdateActiveCues(0);
@@ -1195,6 +1211,10 @@ void HTMLMediaElement::LoadResource(const WebMediaPlayerSource& source,
 
   DCHECK(!media_source_);
 
+#if defined(USE_NEVA_MEDIA)
+  // Added for Neva HTMLMediaElement to handle additional type string
+  ParseContentType(ContentType(content_type));
+#endif
   bool attempt_load = true;
 
   media_source_ = HTMLMediaSource::Lookup(url.GetString());
@@ -1210,11 +1230,22 @@ void HTMLMediaElement::LoadResource(const WebMediaPlayerSource& source,
   if (attempt_load && can_load_resource) {
     DCHECK(!GetWebMediaPlayer());
 
+#if defined(USE_NEVA_MEDIA)
+    // Conditionally defer the load if effective preload is 'none'.
+    // Skip this optional deferral for MediaStream sources or any blob URL,
+    // including MediaSource blob URLs.
+    if (!source.IsMediaStream() &&
+        (m_support_preload_none_on_mse || !url.ProtocolIs("blob")) &&
+        EffectivePreloadType() == WebMediaPlayer::kPreloadNone) {
+      LOG(INFO) << __func__ << " loadResource(" << (void*)this
+                << ") : Delaying load because preload == 'none'";
+#else
     // Conditionally defer the load if effective preload is 'none'.
     // Skip this optional deferral for MediaStream sources or any blob URL,
     // including MediaSource blob URLs.
     if (!source.IsMediaStream() && !url.ProtocolIs("blob") &&
         EffectivePreloadType() == WebMediaPlayer::kPreloadNone) {
+#endif
       BLINK_MEDIA_LOG << "loadResource(" << (void*)this
                       << ") : Delaying load because preload == 'none'";
       DeferLoad();
@@ -1315,6 +1346,14 @@ void HTMLMediaElement::StartPlayerLoad() {
     web_media_player_->EnteredFullscreen();
 
   web_media_player_->BecameDominantVisibleContent(mostly_filling_viewport_);
+
+#if defined(USE_NEVA_MEDIA)
+  if (RuntimeEnabledFeatures::AudioFocusExtensionEnabled() &&
+      cached_audio_focus_) {
+    web_media_player_->SetAudioFocus(true);
+  }
+  ApplyVisibility(true);
+#endif
 }
 
 void HTMLMediaElement::SetPlayerPreload() {
@@ -1819,6 +1858,14 @@ void HTMLMediaElement::SetReadyState(ReadyState state) {
     MediaFragmentURIParser fragment_parser(current_src_);
     fragment_end_time_ = fragment_parser.EndTime();
 
+#if defined(USE_NEVA_MEDIA)
+    // Update the timeline offset to the date and time that corresponds to the zero time
+    // in the media timeline established in the previous step,
+    // if any. If no explicit time and date is given by the media resource,
+    // the timeline offset must be set to Not-a-Number (NaN).
+    m_timelineOffset = web_media_player_->TimelineOffset();
+#endif
+
     // Set the current playback position and the official playback position to
     // the earliest possible position.
     SetOfficialPlaybackPosition(EarliestPossiblePosition());
@@ -2278,7 +2325,12 @@ void HTMLMediaElement::setPlaybackRate(double rate,
   if (GetLoadType() == WebMediaPlayer::kLoadTypeMediaStream)
     return;
 
+#if defined(USE_NEVA_MEDIA)
+  double rate_abs = RuntimeEnabledFeatures::NegativePlaybackRateEnabled()? std::abs(rate) : rate;
+  if (rate_abs != 0.0 && (rate_abs < kMinRate || rate_abs > kMaxRate)) {
+#else
   if (rate != 0.0 && (rate < kMinRate || rate > kMaxRate)) {
+#endif
     UseCounter::Count(GetDocument(),
                       WebFeature::kHTMLMediaElementMediaPlaybackRateOutOfRange);
 
@@ -2686,10 +2738,12 @@ double HTMLMediaElement::EffectiveMediaVolume() const {
   return volume_;
 }
 
+#if !defined(USE_NEVA_MEDIA)
 // The spec says to fire periodic timeupdate events (those sent while playing)
 // every "15 to 250ms", we choose the slowest frequency
 static const TimeDelta kMaxTimeupdateEventFrequency =
     TimeDelta::FromMilliseconds(250);
+#endif
 
 void HTMLMediaElement::StartPlaybackProgressTimer() {
   if (playback_progress_timer_.IsActive())

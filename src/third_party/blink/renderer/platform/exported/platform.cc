@@ -70,6 +70,11 @@
 #include "third_party/webrtc/api/rtpparameters.h"
 #include "third_party/webrtc/p2p/base/portallocator.h"
 
+#if defined(USE_MEMORY_TRACE)
+#include "base/trace_event/neva/memory_trace/memory_trace_manager.h"
+#include "third_party/blink/renderer/platform/neva/partition_alloc_memory_trace_provider.h"
+#endif
+
 namespace blink {
 
 namespace {
@@ -206,6 +211,12 @@ void Platform::InitializeCommon(Platform* platform,
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       PartitionAllocMemoryDumpProvider::Instance(), "PartitionAlloc",
       base::ThreadTaskRunnerHandle::Get());
+#if defined(USE_MEMORY_TRACE)
+    base::trace_event::neva::MemoryTraceManager::GetInstance()
+        ->RegisterTraceProvider(
+            neva::PartitionAllocMemoryTraceProvider::Instance(),
+            "PartitionAlloc", base::ThreadTaskRunnerHandle::Get());
+#endif
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       FontCacheMemoryDumpProvider::Instance(), "FontCaches",
       base::ThreadTaskRunnerHandle::Get());

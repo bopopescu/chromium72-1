@@ -1800,6 +1800,12 @@ DocumentLoader* FrameLoader::CreateDocumentLoader(
   return loader;
 }
 
+#if defined(USE_NEVA_APPRUNTIME)
+void FrameLoader::DidNonFirstMeaningPaintAfterLoad() {
+  Client()->DidNonFirstMeaningPaintAfterLoad();
+}
+#endif
+
 STATIC_ASSERT_ENUM(kWebHistoryScrollRestorationManual,
                    kScrollRestorationManual);
 STATIC_ASSERT_ENUM(kWebHistoryScrollRestorationAuto, kScrollRestorationAuto);

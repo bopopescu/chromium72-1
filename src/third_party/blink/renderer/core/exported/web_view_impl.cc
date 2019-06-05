@@ -165,6 +165,10 @@
 #include "third_party/blink/renderer/core/layout/layout_theme_default.h"
 #endif
 
+#if defined(USE_NEVA_APPRUNTIME)
+#include "third_party/blink/renderer/core/page/injected_style_sheets.h"
+#endif
+
 // Get rid of WTF's pow define so we can use std::pow.
 #undef pow
 #include <cmath>  // for std::pow
@@ -742,6 +746,29 @@ void WebViewImpl::AcceptLanguagesChanged() {
 
   GetPage()->AcceptLanguagesChanged();
 }
+
+#if defined(USE_NEVA_APPRUNTIME)
+void WebView::InjectStyleSheet(const WebString& source_code,
+                               const WebVector<WebString>& patterns_in,
+                               WebView::StyleInjectionTarget inject_in) {
+  Vector<String> patterns;
+  for (size_t i = 0; i < patterns_in.size(); ++i)
+    patterns.push_back(patterns_in[i]);
+
+  InjectedStyleSheets::Instance().Add(source_code, patterns,
+                                      static_cast<blink::StyleInjectionTarget>(inject_in));
+}
+
+void WebView::RemoveInjectedStyleSheets() {
+  InjectedStyleSheets::Instance().RemoveAll();
+}
+
+void WebViewImpl::ReplaceBaseURL(const WebURL& newUrl) {
+  for (WebFrame* coreFrame =  WebViewImpl::MainFrame();
+      coreFrame; coreFrame = coreFrame->TraverseNext())
+    coreFrame->ReplaceBaseURL(newUrl.GetString());
+}
+#endif
 
 void WebViewImpl::PausePageScheduledTasks(bool paused) {
   GetPage()->SetPaused(paused);
@@ -3170,6 +3197,14 @@ void WebViewImpl::SetRootGraphicsLayer(GraphicsLayer* graphics_layer) {
     // We register viewport layers here since there may not be a layer
     // tree view prior to this point.
     RegisterViewportLayersWithCompositor();
+
+#if defined(USE_NEVA_APPRUNTIME)
+    layer_tree_view_->SetVisible(
+        GetPage()->VisibilityState() ==
+            mojom::blink::PageVisibilityState::kVisible ||
+        GetPage()->VisibilityState() ==
+            mojom::blink::PageVisibilityState::kLaunching);
+#endif
   } else {
     root_graphics_layer_ = nullptr;
     visual_viewport_container_layer_ = nullptr;
@@ -3327,8 +3362,18 @@ void WebViewImpl::SetVisibilityState(
     bool is_initial_state) {
   DCHECK(GetPage());
   GetPage()->SetVisibilityState(visibility_state, is_initial_state);
+
+#if defined(USE_NEVA_APPRUNTIME)
+  bool visible = visibility_state == mojom::PageVisibilityState::kVisible;
+  visible = visible ||
+            (visibility_state == mojom::blink::PageVisibilityState::kLaunching);
+  if (layer_tree_view_)
+    layer_tree_view_->SetVisible(visible);
+  GetPage()->GetPageScheduler()->SetPageVisible(visible);
+#else
   GetPage()->GetPageScheduler()->SetPageVisible(
       visibility_state == mojom::PageVisibilityState::kVisible);
+#endif
 }
 
 mojom::PageVisibilityState WebViewImpl::VisibilityState() {

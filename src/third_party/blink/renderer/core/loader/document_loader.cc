@@ -605,6 +605,14 @@ bool DocumentLoader::ShouldContinueForResponse() const {
 
   if (!CanShowMIMEType(response_.MimeType(), frame_))
     return false;
+
+#if defined(USE_NEVA_APPRUNTIME)
+  if (status_code >= 400 && GetLocalFrameClient().DecidePolicyForResponse(response_)) {
+    // If there is any policy for response having status code greater than 400
+    return false;
+  }
+#endif
+
   return true;
 }
 
@@ -1321,6 +1329,13 @@ void DocumentLoader::ReplaceDocumentWhileExecutingJavaScriptURL(
 void DocumentLoader::BlockParser() {
   parser_blocked_count_++;
 }
+
+#if defined(USE_NEVA_APPRUNTIME)
+void DocumentLoader::CommitNonFirstMeaningfulPaintAfterLoad() {
+  if (frame_ && frame_->IsMainFrame() && state_ >= kCommitted)
+    GetFrameLoader().DidNonFirstMeaningPaintAfterLoad();
+}
+#endif
 
 void DocumentLoader::ResumeParser() {
   parser_blocked_count_--;

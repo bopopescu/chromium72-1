@@ -44,6 +44,10 @@ class PaintCanvas;
 class PaintFlags;
 }  // namespace cc
 
+#if defined(USE_NEVA_MEDIA)
+#include "third_party/blink/public/platform/neva/web_media_player.h"
+#endif
+
 namespace gpu {
 namespace gles2 {
 class GLES2Interface;
@@ -62,7 +66,11 @@ struct WebRect;
 struct WebSize;
 struct PictureInPictureControlInfo;
 
+#if defined(USE_NEVA_MEDIA)
+class WebMediaPlayer : public neva::WebMediaPlayer {
+#else
 class WebMediaPlayer {
+#endif
  public:
   enum NetworkState {
     kNetworkStateEmpty,

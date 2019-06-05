@@ -64,6 +64,12 @@ struct WebRect;
 struct WebSize;
 struct WebWindowFeatures;
 
+#if defined(USE_NEVA_APPRUNTIME)
+class WebURL;
+template <typename T>
+class WebVector;
+#endif
+
 class WebView {
  public:
   BLINK_EXPORT static const double kTextSizeMultiplierRatio;
@@ -405,6 +411,18 @@ class WebView {
   // Force the drawing buffer used by webgl contexts to fail so that the webgl
   // context's ability to deal with that failure gracefully can be tested.
   virtual void ForceNextDrawingBufferCreationToFail() = 0;
+
+#if defined(USE_NEVA_APPRUNTIME)
+  // Injected style ------------------------------------------------------
+  // Treats |sourceCode| as a CSS author style sheet and injects it into all Documents whose URLs match |patterns|,
+  // in the frames specified by the last argument.
+  BLINK_EXPORT static void InjectStyleSheet(const WebString& source_code,
+                                            const WebVector<WebString>& patterns_in,
+                                            StyleInjectionTarget inject_in);
+  BLINK_EXPORT static void RemoveInjectedStyleSheets();
+
+  virtual void ReplaceBaseURL(const WebURL& newURL) = 0;
+#endif
 
   // Autoplay configuration -----------------------------------------------
 

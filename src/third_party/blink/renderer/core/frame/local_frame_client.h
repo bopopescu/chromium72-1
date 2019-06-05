@@ -166,6 +166,13 @@ class CORE_EXPORT LocalFrameClient : public FrameClient {
       const String& href_translate,
       mojom::blink::NavigationInitiatorPtr) = 0;
 
+#if defined(USE_NEVA_APPRUNTIME)
+  // Will be called when first-Meaningful-paint is not detected until resource loaded.
+  virtual void DidNonFirstMeaningPaintAfterLoad() {}
+  virtual bool DecidePolicyForResponse(const ResourceResponse&) {
+    return false;
+  }
+#endif
   virtual void DispatchWillSendSubmitEvent(HTMLFormElement*) = 0;
 
   virtual void DidStartLoading() = 0;

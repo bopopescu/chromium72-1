@@ -579,6 +579,19 @@ void LocalFrameClientImpl::BeginNavigation(
   web_frame_->Client()->BeginNavigation(std::move(navigation_info));
 }
 
+#if defined(USE_NEVA_APPRUNTIME)
+void LocalFrameClientImpl::DidNonFirstMeaningPaintAfterLoad() {
+  if (web_frame_->Client())
+    web_frame_->Client()->DidNonFirstMeaningPaintAfterLoad();
+}
+
+bool LocalFrameClientImpl::DecidePolicyForResponse(const ResourceResponse& response) {
+  if (web_frame_->Client())
+    return web_frame_->Client()->DecidePolicyForResponse(WrappedResourceResponse(response));
+  return false;
+}
+#endif
+
 void LocalFrameClientImpl::DispatchWillSendSubmitEvent(HTMLFormElement* form) {
   if (web_frame_->Client())
     web_frame_->Client()->WillSendSubmitEvent(WebFormElement(form));

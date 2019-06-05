@@ -116,6 +116,10 @@ class WebDocument : public WebNode {
       const WebStyleSheetKey* = nullptr,
       CSSOrigin = kAuthorOrigin);
 
+#if defined(USE_NEVA_APPRUNTIME)
+  static BLINK_EXPORT const blink::WebStyleSheetKey GenerateNewStyleSheetKey();
+#endif
+
   // Removes the CSS which was previously inserted by a call to
   // InsertStyleSheet().
   BLINK_EXPORT void RemoveInsertedStyleSheet(const WebStyleSheetKey&,

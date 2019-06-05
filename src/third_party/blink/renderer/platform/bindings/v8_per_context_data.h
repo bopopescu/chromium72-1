@@ -52,6 +52,7 @@ namespace blink {
 class V0CustomElementBinding;
 class V8DOMActivityLogger;
 class V8PerContextData;
+
 struct WrapperTypeInfo;
 
 // Used to hold data that is associated with a single v8::Context object, and

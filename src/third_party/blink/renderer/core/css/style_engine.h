@@ -121,11 +121,17 @@ class CORE_EXPORT StyleEngine final
   const HeapVector<TraceWrapperMember<StyleSheet>>&
   StyleSheetsForStyleSheetList(TreeScope&);
 
+#if defined(USE_NEVA_APPRUNTIME)
+  const HeapVector<
+      std::pair<StyleSheetKey, TraceWrapperMember<CSSStyleSheet>>>&
+  InjectedAuthorStyleSheets();
+#else
   const HeapVector<
       std::pair<StyleSheetKey, TraceWrapperMember<CSSStyleSheet>>>&
   InjectedAuthorStyleSheets() const {
     return injected_author_style_sheets_;
   }
+#endif
 
   CSSStyleSheet* InspectorStyleSheet() const { return inspector_style_sheet_; }
 
@@ -149,12 +155,19 @@ class CORE_EXPORT StyleEngine final
   void HtmlImportAddedOrRemoved();
   void V0ShadowAddedOnV1Document();
 
-  void InjectSheet(const StyleSheetKey&, StyleSheetContents*,
-                   WebDocument::CSSOrigin =
-                       WebDocument::kAuthorOrigin);
+  void InjectSheet(const StyleSheetKey&,
+                   StyleSheetContents*,
+                   WebDocument::CSSOrigin = WebDocument::kAuthorOrigin);
   void RemoveInjectedSheet(const StyleSheetKey&,
                            WebDocument::CSSOrigin =
                                WebDocument::kAuthorOrigin);
+
+#if defined(USE_NEVA_APPRUNTIME)
+  void InvalidateInjectedStyleSheetCache();
+  void UpdateInjectedStyleSheetCache();
+  void CompatibilityModeChanged();
+#endif
+
   CSSStyleSheet& EnsureInspectorStyleSheet();
   RuleSet* WatchedSelectorsRuleSet() {
     DCHECK(IsMaster());
@@ -527,6 +540,10 @@ class CORE_EXPORT StyleEngine final
   using KeyframesRuleMap =
       HeapHashMap<AtomicString, Member<StyleRuleKeyframes>>;
   KeyframesRuleMap keyframes_rule_map_;
+
+#if defined(USE_NEVA_APPRUNTIME)
+  bool injected_style_sheet_cache_valid_;
+#endif
 
   scoped_refptr<DocumentStyleEnvironmentVariables> environment_variables_;
 

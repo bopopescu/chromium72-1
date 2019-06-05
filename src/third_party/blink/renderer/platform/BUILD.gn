@@ -1392,6 +1392,13 @@ jumbo_component("platform") {
     "windows_keyboard_codes.h",
   ]
 
+if (use_neva_appruntime) {
+  sources += [
+    "url_pattern_matcher.cc",
+    "url_pattern_matcher.h",
+  ]
+}
+
   sources -= blink_platform_avx_files
 
   # Add in the generated files.
@@ -1528,6 +1535,10 @@ jumbo_component("platform") {
       "text/hyphenation/hyphenator_aosp.cc",
       "text/hyphenation/hyphenator_aosp.h",
     ]
+  }
+
+  if (use_memory_trace) {
+    deps += [ "//third_party/blink/renderer/platform/neva" ]
   }
 
   if (current_cpu == "x86" || current_cpu == "x64") {
