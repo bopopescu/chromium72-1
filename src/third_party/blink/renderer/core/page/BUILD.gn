@@ -98,11 +98,4 @@ blink_core_sources("page") {
     "viewport_description.h",
   ]
 
-if (use_neva_appruntime) {
-  sources += [
-    "injected_style_sheets.cc",
-    "injected_style_sheets.h",
-  ]
-}
-
 }

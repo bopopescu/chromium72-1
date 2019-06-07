@@ -813,17 +813,8 @@ void Document::SetCompatibilityMode(CompatibilityMode mode) {
     UseCounter::Count(*this, WebFeature::kQuirksModeDocument);
   else if (compatibility_mode_ == kLimitedQuirksMode)
     UseCounter::Count(*this, WebFeature::kLimitedQuirksModeDocument);
-#if defined(USE_NEVA_APPRUNTIME)
-  bool was_in_quirks_mode = InQuirksMode();
-#endif
   compatibility_mode_ = mode;
   GetSelectorQueryCache().Invalidate();
-#if defined(USE_NEVA_APPRUNTIME)
-  if (InQuirksMode() != was_in_quirks_mode) {
-    // All injected stylesheets have to reparse using the different mode.
-    style_engine_->CompatibilityModeChanged();
-  }
-#endif
 }
 
 String Document::compatMode() const {

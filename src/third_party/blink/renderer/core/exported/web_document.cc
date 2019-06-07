@@ -285,12 +285,6 @@ WebDistillabilityFeatures WebDocument::DistillabilityFeatures() {
   return DocumentStatisticsCollector::CollectStatistics(*Unwrap<Document>());
 }
 
-#if defined(USE_NEVA_APPRUNTIME)
-const blink::WebStyleSheetKey WebDocument::GenerateNewStyleSheetKey() {
-  return GenerateStyleSheetKey();
-}
-#endif
-
 WebDocument::WebDocument(Document* elem) : WebNode(elem) {}
 
 DEFINE_WEB_NODE_TYPE_CASTS(WebDocument, ConstUnwrap<Node>()->IsDocumentNode());

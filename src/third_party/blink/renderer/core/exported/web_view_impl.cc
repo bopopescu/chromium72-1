@@ -165,10 +165,6 @@
 #include "third_party/blink/renderer/core/layout/layout_theme_default.h"
 #endif
 
-#if defined(USE_NEVA_APPRUNTIME)
-#include "third_party/blink/renderer/core/page/injected_style_sheets.h"
-#endif
-
 // Get rid of WTF's pow define so we can use std::pow.
 #undef pow
 #include <cmath>  // for std::pow
@@ -748,21 +744,6 @@ void WebViewImpl::AcceptLanguagesChanged() {
 }
 
 #if defined(USE_NEVA_APPRUNTIME)
-void WebView::InjectStyleSheet(const WebString& source_code,
-                               const WebVector<WebString>& patterns_in,
-                               WebView::StyleInjectionTarget inject_in) {
-  Vector<String> patterns;
-  for (size_t i = 0; i < patterns_in.size(); ++i)
-    patterns.push_back(patterns_in[i]);
-
-  InjectedStyleSheets::Instance().Add(source_code, patterns,
-                                      static_cast<blink::StyleInjectionTarget>(inject_in));
-}
-
-void WebView::RemoveInjectedStyleSheets() {
-  InjectedStyleSheets::Instance().RemoveAll();
-}
-
 void WebViewImpl::ReplaceBaseURL(const WebURL& newUrl) {
   for (WebFrame* coreFrame =  WebViewImpl::MainFrame();
       coreFrame; coreFrame = coreFrame->TraverseNext())

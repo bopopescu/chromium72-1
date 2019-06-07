@@ -1392,13 +1392,6 @@ jumbo_component("platform") {
     "windows_keyboard_codes.h",
   ]
 
-if (use_neva_appruntime) {
-  sources += [
-    "url_pattern_matcher.cc",
-    "url_pattern_matcher.h",
-  ]
-}
-
   sources -= blink_platform_avx_files
 
   # Add in the generated files.
