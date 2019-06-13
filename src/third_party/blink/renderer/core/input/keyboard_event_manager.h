@@ -56,6 +56,9 @@ class CORE_EXPORT KeyboardEventManager
   void DefaultTabEventHandler(KeyboardEvent*);
   void DefaultEscapeEventHandler(KeyboardEvent*);
   void DefaultArrowEventHandler(KeyboardEvent*, Node*);
+#if defined(USE_NEVA_APPRUNTIME)
+  void DefaultGoBackEventHandler(KeyboardEvent*);
+#endif
 
   const Member<LocalFrame> frame_;
 

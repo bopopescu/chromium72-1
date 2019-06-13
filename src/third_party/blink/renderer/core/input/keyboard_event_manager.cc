@@ -29,6 +29,10 @@
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
 #include "third_party/blink/renderer/platform/windows_keyboard_codes.h"
 
+#if defined(USE_NEVA_APPRUNTIME)
+#include "third_party/blink/renderer/core/frame/settings.h"
+#endif
+
 #if defined(OS_WIN)
 #include <windows.h>
 #elif defined(OS_MACOSX)
@@ -233,6 +237,14 @@ WebInputEventResult KeyboardEventManager::KeyEvent(
   if (matched_an_access_key)
     keydown->SetDefaultPrevented(true);
   keydown->SetTarget(node);
+
+#if defined(USE_NEVA_APPRUNTIME)
+  if (keydown->key() == "GoBack" &&
+      frame_->GetSettings()->BackHistoryAPIEnabled()) {
+    DefaultGoBackEventHandler(keydown);
+    return WebInputEventResult::kHandledSystem;
+  }
+#endif
 
   DispatchEventResult dispatch_result = node->DispatchEvent(*keydown);
   if (dispatch_result != DispatchEventResult::kNotCanceled)
@@ -467,5 +479,15 @@ WebInputEvent::Modifiers KeyboardEventManager::GetCurrentModifierState() {
 #endif
   return static_cast<WebInputEvent::Modifiers>(modifiers);
 }
+
+#if defined(USE_NEVA_APPRUNTIME)
+void KeyboardEventManager::DefaultGoBackEventHandler(KeyboardEvent* event) {
+  DCHECK_EQ(event->type(), event_type_names::kKeydown);
+  bool handledEvent =
+      frame_->Client()->NavigateBackForward(event->shiftKey() ? 1 : -1);
+  if (handledEvent)
+    event->SetDefaultHandled();
+}
+#endif
 
 }  // namespace blink
