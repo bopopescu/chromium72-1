@@ -30,6 +30,10 @@ class WebSettingsImplNeva : public WebSettings {
     settings_->SetBackHistoryAPIEnabled(enabled);
   }
 
+  void SetWebOSNativeScrollEnabled(bool enabled) override {
+    settings_->SetWebOSNativeScrollEnabled(enabled);
+  }
+
  private:
   Settings* settings_;
 };

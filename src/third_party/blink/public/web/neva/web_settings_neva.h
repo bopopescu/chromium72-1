@@ -22,6 +22,7 @@ namespace blink {
 class WebSettingsNeva {
  public:
   virtual void SetBackHistoryAPIEnabled(bool) = 0;
+  virtual void SetWebOSNativeScrollEnabled(bool) = 0;
 };
 
 }  // namespace blink

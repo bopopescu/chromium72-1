@@ -21,15 +21,23 @@ namespace blink {
 
 class SettingsNeva {
  public:
-  SettingsNeva() : back_history_api_enabled_(false) {}
+  SettingsNeva()
+      : back_history_api_enabled_(false),
+        webos_native_scroll_enabled_(false) {}
 
   void SetBackHistoryAPIEnabled(bool enable) {
     back_history_api_enabled_ = enable;
   }
   bool BackHistoryAPIEnabled() const { return back_history_api_enabled_; }
 
+  void SetWebOSNativeScrollEnabled(bool enable) {
+    webos_native_scroll_enabled_ = enable;
+  }
+  bool WebOSNativeScrollEnabled() { return webos_native_scroll_enabled_; }
+
  private:
   bool back_history_api_enabled_ : 1;
+  bool webos_native_scroll_enabled_ : 1;
 };
 
 }  // namespace blink

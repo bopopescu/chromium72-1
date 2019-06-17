@@ -552,6 +552,8 @@ class CORE_EXPORT PaintLayerScrollableArea final
     return scrolling_background_display_item_client_;
   }
 
+  bool IsWebOSNativeScrollEnabled();
+
  private:
   bool NeedsScrollbarReconstruction() const;
 
