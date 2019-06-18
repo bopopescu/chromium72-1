@@ -23,7 +23,8 @@ class SettingsNeva {
  public:
   SettingsNeva()
       : back_history_api_enabled_(false),
-        webos_native_scroll_enabled_(false) {}
+        webos_native_scroll_enabled_(false),
+        keep_alive_web_app_(false) {}
 
   void SetBackHistoryAPIEnabled(bool enable) {
     back_history_api_enabled_ = enable;
@@ -35,9 +36,13 @@ class SettingsNeva {
   }
   bool WebOSNativeScrollEnabled() { return webos_native_scroll_enabled_; }
 
+  void SetKeepAliveWebApp(bool keep_alive) { keep_alive_web_app_ = keep_alive; }
+  bool KeepAliveWebApp() const { return keep_alive_web_app_; }
+
  private:
   bool back_history_api_enabled_ : 1;
   bool webos_native_scroll_enabled_ : 1;
+  bool keep_alive_web_app_ : 1;
 };
 
 }  // namespace blink

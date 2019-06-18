@@ -34,6 +34,12 @@ class WebSettingsImplNeva : public WebSettings {
     settings_->SetWebOSNativeScrollEnabled(enabled);
   }
 
+  void SetKeepAliveWebApp(bool keep_alive) override {
+    settings_->SetKeepAliveWebApp(keep_alive);
+  }
+
+  bool KeepAliveWebApp() override { return settings_->KeepAliveWebApp(); }
+
  private:
   Settings* settings_;
 };
