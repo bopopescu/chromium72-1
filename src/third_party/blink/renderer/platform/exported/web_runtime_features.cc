@@ -150,6 +150,10 @@ void WebRuntimeFeatures::EnableCSSFragmentIdentifiers(bool enable) {
   RuntimeEnabledFeatures::SetCSSFragmentIdentifiersEnabled(enable);
 }
 
+void WebRuntimeFeatures::EnableCSSNavigation(bool enable) {
+  RuntimeEnabledFeatures::SetCSSNavigationEnabled(enable);
+}
+
 void WebRuntimeFeatures::EnableScrollTopLeftInterop(bool enable) {
   RuntimeEnabledFeatures::SetScrollTopLeftInteropEnabled(enable);
 }

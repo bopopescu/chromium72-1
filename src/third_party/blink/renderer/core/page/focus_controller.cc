@@ -757,6 +757,66 @@ Element* FindFocusableElementAcrossFocusScopes(
              : FindFocusableElementAcrossFocusScopesBackward(scope, owner_map);
 }
 
+static bool AdvanceFocusCSSNavigation(WebFocusType type,
+                                      Element* focused_element,
+                                      LocalFrame* current_frame,
+                                      Document* focused_document) {
+  if (!focused_element || !current_frame || !focused_document)
+    return false;
+
+  LayoutObject* layoutObject = focused_element->GetLayoutObject();
+  const ComputedStyle* style = layoutObject ? layoutObject->Style() : 0;
+  if (!style)
+    return false;
+
+  int property_id = 0;
+  switch (type) {
+    case kWebFocusTypeUp:
+      property_id = CSSPropertyNavUp;
+      break;
+    case kWebFocusTypeDown:
+      property_id = CSSPropertyNavDown;
+      break;
+    case kWebFocusTypeLeft:
+      property_id = CSSPropertyNavLeft;
+      break;
+    case kWebFocusTypeRight:
+      property_id = CSSPropertyNavRight;
+      break;
+    default:
+      NOTREACHED();
+      break;
+  }
+
+  const scoped_refptr<StyleNavigationData> navigation =
+      style->Navigation(property_id);
+  if (navigation && navigation->flag) {
+    Frame* target_frame = nullptr;
+    if (navigation->flag == StyleNavigationData::NAVIGATION_TARGET_ROOT)
+      target_frame = &current_frame->Tree().Top();
+    else if (navigation->flag == StyleNavigationData::NAVIGATION_TARGET_NAME)
+      target_frame =
+          current_frame->Tree().Find(AtomicString(navigation->target));
+
+    Document* target_document = 0;
+    if (target_frame)
+      target_document = ToLocalFrame(target_frame)->GetDocument();
+    if (!target_document)
+      target_document = focused_document;
+
+    Element* element =
+        target_document->getElementById(AtomicString(navigation->id));
+    if (element && element->IsKeyboardFocusable()) {
+      if (element != focused_element)
+        element->focus(
+            FocusParams(SelectionBehaviorOnFocus::kReset, type, nullptr));
+      return true;
+    }
+  }
+
+  return false;
+}
+
 }  // anonymous namespace
 
 FocusController::FocusController(Page* page)
@@ -1098,7 +1158,7 @@ bool FocusController::AdvanceFocusInDocumentOrder(
 
   DCHECK(element->IsFocusable());
 
-  // FIXME: It would be nice to just be able to call setFocusedElement(element)
+  // FIXME: It would be nice to just be able to call SetFocusedElement(element)
   // here, but we can't do that because some elements (e.g. HTMLInputElement
   // and HTMLTextAreaElement) do extra work in their focus() methods.
   Document& new_document = element->GetDocument();
@@ -1457,7 +1517,7 @@ bool FocusController::AdvanceFocusDirectionally(WebFocusType direction) {
   // FIXME: Directional focus changes don't yet work with RemoteFrames.
   if (!FocusedOrMainFrame()->IsLocalFrame())
     return false;
-  const LocalFrame* current_frame = ToLocalFrame(FocusedOrMainFrame());
+  LocalFrame* current_frame = ToLocalFrame(FocusedOrMainFrame());
   DCHECK(current_frame);
 
   Document* focused_document = current_frame->GetDocument();
@@ -1465,6 +1525,14 @@ bool FocusController::AdvanceFocusDirectionally(WebFocusType direction) {
     return false;
 
   Element* focused_element = focused_document->FocusedElement();
+  if (RuntimeEnabledFeatures::CSSNavigationEnabled()) {
+    if (AdvanceFocusCSSNavigation(direction, focused_element, current_frame,
+                                  focused_document))
+      return true;
+    if (!IsSpatialNavigationEnabled(current_frame))
+      return false;
+  }
+
   Node* container = focused_document;
   if (auto* document = DynamicTo<Document>(container))
     document->UpdateStyleAndLayoutIgnorePendingStylesheets();

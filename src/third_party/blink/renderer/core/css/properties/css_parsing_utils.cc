@@ -2597,5 +2597,42 @@ CSSValue* ParsePaintStroke(CSSParserTokenRange& range,
   return css_property_parser_helpers::ConsumeColor(range, context.Mode());
 }
 
+CSSValue* ConsumeNavigationDirection(CSSParserTokenRange& range) {
+  if (range.Peek().Id() == CSSValueAuto)
+    return css_property_parser_helpers::ConsumeIdent(range);
+
+  if (range.Peek().GetType() != kHashToken ||
+      range.Peek().GetHashTokenType() != kHashTokenId)
+    return nullptr;
+
+  CSSValue* parsed_value1 = CSSCustomIdentValue::Create(
+      range.ConsumeIncludingWhitespace().Value().ToAtomicString());
+  if (range.Peek().GetType() != kIdentToken)
+    return parsed_value1;
+
+  CSSValue* parsed_value2 =
+      css_property_parser_helpers::ConsumeIdent<CSSValueCurrent, CSSValueRoot>(
+          range);
+  if (!parsed_value2) {
+    parsed_value2 = CSSCustomIdentValue::Create(
+        range.ConsumeIncludingWhitespace().Value().ToAtomicString());
+  }
+
+  if (!parsed_value2)
+    return parsed_value1;
+
+  CSSValueList* values = CSSValueList::CreateSpaceSeparated();
+  values->Append(*parsed_value1);
+  values->Append(*parsed_value2);
+
+  return values;
+}
+
+CSSValue* ConsumeNavigationIndex(CSSParserTokenRange& range) {
+  if (range.Peek().Id() == CSSValueAuto)
+    return css_property_parser_helpers::ConsumeIdent(range);
+  return css_property_parser_helpers::ConsumeInteger(range);
+}
+
 }  // namespace css_parsing_utils
 }  // namespace blink
