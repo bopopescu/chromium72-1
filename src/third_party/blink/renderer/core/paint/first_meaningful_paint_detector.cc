@@ -275,6 +275,14 @@ void FirstMeaningfulPaintDetector::ReportSwapTime(
     SetFirstMeaningfulPaint(first_meaningful_paint2_quiet_,
                             provisional_first_meaningful_paint_swap_);
   }
+#if defined(USE_NEVA_APPRUNTIME)
+  else if (seen_first_meaningful_paint_candidate_) {
+    first_meaningful_paint2_quiet_ = CurrentTimeTicks();
+    network2_quiet_reached_ = true;
+    SetFirstMeaningfulPaint(first_meaningful_paint2_quiet_,
+                            provisional_first_meaningful_paint_swap_);
+  }
+#endif
 }
 
 void FirstMeaningfulPaintDetector::NotifyFirstContentfulPaint(
