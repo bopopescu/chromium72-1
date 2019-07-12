@@ -70,7 +70,7 @@ __thread ThreadCache* ThreadCache::threadlocal_heap_
 // gcc has a problem with this tls model on arm.
 // See https://bugs.chromium.org/p/chromium/issues/detail?id=650137
 #if defined(HAVE___ATTRIBUTE__) && !defined(PGO_GENERATE) && \
-    !(!defined(__clang__) && defined(OS_CHROMEOS) && defined(__arm__))
+    !(defined(COMPILER_GCC) && !defined(__clang__) && defined(__arm__))
    __attribute__ ((tls_model ("initial-exec")))
 # endif
    ;
