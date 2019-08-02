@@ -57,8 +57,18 @@ void JSEventListener::InvokeInternal(EventTarget&,
       event.type() == event_type_names::kAfterprint;
   const bool is_media_query_list_event =
       event.InterfaceName() == event_interface_names::kMediaQueryListEvent;
+
+  // TODO(NEVA): This implementation is changed in chromium74 and newer version.
+  // We have to add a new class named VisibilityChangeEvent which inherits class
+  // Event, and override ShouldDispatchEvenWhenExecutionContextIsPaused() which
+  // returns true. For example: BeforeUnloadEvent in chromium74 and later.
+  const bool is_visibility_change_event =
+      event.type() == event_type_names::kVisibilitychange ||
+      event.type() == event_type_names::kWebkitvisibilitychange;
+
   if (!event_listener_->IsRunnableOrThrowException(
-          (is_beforeunload_event || is_print_event || is_media_query_list_event)
+          (is_beforeunload_event || is_print_event ||
+           is_media_query_list_event || is_visibility_change_event)
               ? V8EventListener::IgnorePause::kIgnore
               : V8EventListener::IgnorePause::kDontIgnore)) {
     return;
