@@ -38,6 +38,7 @@ ValueRange LengthPropertyFunctions::GetValueRange(const CSSProperty& property) {
     case CSSPropertyRowGap:
     case CSSPropertyColumnWidth:
     case CSSPropertyWidth:
+    case CSSPropertyCaretWidth:
       return kValueRangeNonNegative;
     default:
       return kValueRangeAll;
@@ -306,6 +307,11 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
         return false;
       result = Length(style.ColumnWidth(), kFixed);
       return true;
+    case CSSPropertyCaretWidth:
+      if (style.HasAutoCaretWidth())
+        return false;
+      result = Length(style.CaretWidth(), kFixed);
+      return true;
     default:
       return false;
   }
@@ -446,6 +452,7 @@ bool LengthPropertyFunctions::SetLength(const CSSProperty& property,
     case CSSPropertyColumnWidth:
     case CSSPropertyWebkitTransformOriginZ:
     case CSSPropertyWordSpacing:
+    case CSSPropertyCaretWidth:
       return false;
 
     default:

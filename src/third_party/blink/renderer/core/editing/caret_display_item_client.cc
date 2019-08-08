@@ -162,6 +162,7 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
 
   if (!new_layout_block) {
     color_ = Color();
+    caret_width_ = 1.f;
     local_rect_ = LayoutRect();
     return;
   }
@@ -170,6 +171,8 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
   if (caret_position.AnchorNode()) {
     new_color = caret_position.AnchorNode()->GetLayoutObject()->ResolveColor(
         GetCSSPropertyCaretColor());
+    caret_width_ =
+        caret_position.AnchorNode()->GetLayoutObject()->StyleRef().CaretWidth();
   }
   if (new_color != color_) {
     needs_paint_invalidation_ = true;

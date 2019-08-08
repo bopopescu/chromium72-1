@@ -1234,6 +1234,8 @@ int UseCounter::MapCSSPropertyIdToCSSSampleIdForHistogram(
       return 640;
     case CSSPropertyNavIndex:
       return 641;
+    case CSSPropertyCaretWidth:
+      return 642;
     // 1. Add new features above this line (don't change the assigned numbers of
     // the existing items).
     // 2. Update kMaximumCSSSampleId (defined in

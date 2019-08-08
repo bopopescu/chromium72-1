@@ -160,6 +160,10 @@ void FrameCaret::InvalidatePaint(const LayoutBlock& block,
   display_item_client_->InvalidatePaint(block, context);
 }
 
+float FrameCaret::GetCaretWidth() const {
+  return display_item_client_->CaretWidth();
+}
+
 static IntRect AbsoluteBoundsForLocalRect(Node* node, const LayoutRect& rect) {
   LayoutBlock* caret_painter = CaretDisplayItemClient::CaretLayoutBlock(node);
   if (!caret_painter)

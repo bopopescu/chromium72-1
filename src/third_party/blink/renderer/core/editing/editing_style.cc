@@ -87,7 +87,7 @@ static const CSSPropertyID kStaticEditingProperties[] = {
     CSSPropertyWidows, CSSPropertyWordSpacing,
     CSSPropertyWebkitTextDecorationsInEffect, CSSPropertyWebkitTextFillColor,
     CSSPropertyWebkitTextStrokeColor, CSSPropertyWebkitTextStrokeWidth,
-    CSSPropertyCaretColor};
+    CSSPropertyCaretColor, CSSPropertyCaretWidth};
 
 enum EditingPropertiesType {
   kOnlyInheritableEditingProperties,

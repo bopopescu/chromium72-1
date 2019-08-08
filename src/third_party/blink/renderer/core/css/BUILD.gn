@@ -470,6 +470,7 @@ blink_core_sources("css") {
     "properties/longhands/buffered_rendering_custom.cc",
     "properties/longhands/caption_side_custom.cc",
     "properties/longhands/caret_color_custom.cc",
+    "properties/longhands/caret_width_custom.cc",
     "properties/longhands/clear_custom.cc",
     "properties/longhands/clip_custom.cc",
     "properties/longhands/clip_path_custom.cc",

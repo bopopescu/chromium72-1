@@ -123,6 +123,7 @@ const InterpolationTypes& CSSInterpolationTypesMap::Get(
       case CSSPropertyBorderRightWidth:
       case CSSPropertyBorderTopWidth:
       case CSSPropertyBottom:
+      case CSSPropertyCaretWidth:
       case CSSPropertyCx:
       case CSSPropertyCy:
       case CSSPropertyFlexBasis:
