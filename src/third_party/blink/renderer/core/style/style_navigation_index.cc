@@ -18,7 +18,9 @@
 
 namespace blink {
 
-StyleNavigationIndex::StyleNavigationIndex() : is_auto(true) {}
+StyleNavigationIndex::StyleNavigationIndex()
+    : is_auto(true),
+      index(static_cast<int>(std::numeric_limits<short>::min())) {}
 
 StyleNavigationIndex::StyleNavigationIndex(const StyleNavigationIndex& o)
     : RefCounted<StyleNavigationIndex>(), index(o.index), is_auto(o.is_auto) {}
