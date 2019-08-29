@@ -40,6 +40,13 @@ class WebSettingsImplNeva : public WebSettings {
 
   bool KeepAliveWebApp() override { return settings_->KeepAliveWebApp(); }
 
+  void SetGpuRasterizationAllowed(bool allowed) {
+    bool changed = allowed != settings_->GpuRasterizationAllowed();
+    settings_->SetGpuRasterizationAllowed(allowed);
+    if (changed)
+      settings_->NotifyGpuRasterizationAllowedChange();
+  }
+
  private:
   Settings* settings_;
 };

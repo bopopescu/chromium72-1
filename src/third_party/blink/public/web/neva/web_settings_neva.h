@@ -25,6 +25,7 @@ class WebSettingsNeva {
   virtual void SetWebOSNativeScrollEnabled(bool) = 0;
   virtual void SetKeepAliveWebApp(bool) = 0;
   virtual bool KeepAliveWebApp() = 0;
+  virtual void SetGpuRasterizationAllowed(bool) = 0;
 };
 
 }  // namespace blink

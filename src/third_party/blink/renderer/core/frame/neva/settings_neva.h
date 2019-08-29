@@ -17,6 +17,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_NEVA_SETTINGS_NEVA_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_NEVA_SETTINGS_NEVA_H_
 
+#include "third_party/blink/renderer/core/frame/settings_delegate.h"
+
 namespace blink {
 
 class SettingsNeva {
@@ -24,7 +26,8 @@ class SettingsNeva {
   SettingsNeva()
       : back_history_api_enabled_(false),
         webos_native_scroll_enabled_(false),
-        keep_alive_web_app_(false) {}
+        keep_alive_web_app_(false),
+        gpu_rasterization_allowed_(true) {}
 
   void SetBackHistoryAPIEnabled(bool enable) {
     back_history_api_enabled_ = enable;
@@ -39,10 +42,16 @@ class SettingsNeva {
   void SetKeepAliveWebApp(bool keep_alive) { keep_alive_web_app_ = keep_alive; }
   bool KeepAliveWebApp() const { return keep_alive_web_app_; }
 
+  void SetGpuRasterizationAllowed(bool allowed) {
+    gpu_rasterization_allowed_ = allowed;
+  }
+  bool GpuRasterizationAllowed() { return gpu_rasterization_allowed_; }
+
  private:
   bool back_history_api_enabled_ : 1;
   bool webos_native_scroll_enabled_ : 1;
   bool keep_alive_web_app_ : 1;
+  bool gpu_rasterization_allowed_ : 1;
 };
 
 }  // namespace blink
